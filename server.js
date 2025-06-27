@@ -3,7 +3,6 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const mysql = require('mysql2');
 
-
 // Load environment variables
 dotenv.config();
 
@@ -12,21 +11,33 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'https://localhost:3000',
+        'https://127.0.0.1:3000',
+        'https://cclcusa.org',
+        'https://www.cclcusa.org',
+        'http://cclcusa.org',
+        'http://www.cclcusa.org',
+        process.env.FRONTEND_URL
+    ].filter(Boolean),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 // Database connection
 console.log('Connecting to database with env:', {
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    port: process.env.DB_PORT
+    port: process.env.DB_PORT,
 });
+
 const db = mysql.createConnection({
     // host: process.env.DB_HOST,
     // user: process.env.DB_USER,
@@ -45,7 +56,20 @@ const db = mysql.createConnection({
     password: "CCLC@IP840!",
     database: "cclcusa_db",
     port: 3306,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    acquireTimeout: 60000,
+    timeout: 60000,
+    reconnect: true,
+    // Key settings for handling timeouts
+    idleTimeout: 300000, // 5 minutes
+    maxIdle: 10,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
 });
+
+
 
 db.connect((err) => {
     if (err) {
@@ -53,6 +77,25 @@ db.connect((err) => {
         console.log('Server will continue to run without database connection');
     } else {
         console.log('Connected to MySQL database');
+    }
+});
+
+// Handle database connection errors and reconnection
+db.on('error', (err) => {
+    console.error('Database connection error:', err);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.log('Database connection was lost. Attempting to reconnect...');
+        setTimeout(() => {
+            db.connect((reconnectErr) => {
+                if (reconnectErr) {
+                    console.error('Failed to reconnect to database:', reconnectErr);
+                } else {
+                    console.log('Successfully reconnected to database');
+                }
+            });
+        }, 2000);
+    } else {
+        console.error('Database error:', err);
     }
 });
 
@@ -80,11 +123,6 @@ app.use('/api/signed-ita-attendance', require('./routes/signedItaAttendance'));
 app.use('/api/midterm-reports', require('./routes/midtermReports'));
 app.use('/api/student-progress-reports', require('./routes/studentProgressReports'));
 
-// Default route
-app.get('/', (req, res) => {
-    res.json({ message: 'CCLC Admin Panel API Server' });
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
@@ -96,6 +134,9 @@ app.use((req, res) => {
     res.status(404).json({ message: 'Route not found' });
 });
 
+// Start HTTP server
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Access your API at: ${process.env.NODE_ENV === 'production' ? 'https://your-app-name.onrender.com' : `http://localhost:${PORT}`}`);
 }); 
