@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { logActivity, ACTIVITY_TYPES } = require('../utils/activityLogger');
 
 // Helper function to ensure calendar_events table exists
 function ensureCalendarTableExists(db, callback) {
@@ -234,19 +233,6 @@ router.post('/events', (req, res) => {
         return res.status(500).json({ message: 'Server error while creating event' });
       }
 
-      // Log the activity
-      try {
-        logActivity(db, {
-          userId: req.user?.id,
-          actionType: ACTIVITY_TYPES.CALENDAR_EVENT_CREATED,
-          entityType: 'calendar_event',
-          entityId: result.insertId,
-          details: `Created calendar event: ${title}`
-        });
-      } catch (logErr) {
-        console.error('Error logging activity:', logErr);
-      }
-
       res.status(201).json({ 
         success: true, 
         message: 'Calendar event created successfully',
@@ -335,20 +321,6 @@ router.put('/events/:id', (req, res) => {
           return res.status(500).json({ message: 'Server error while updating event' });
         }
 
-        // Log the activity
-        try {
-          logActivity(db, {
-            userId: req.user?.id,
-            actionType: ACTIVITY_TYPES.CALENDAR_EVENT_UPDATED,
-            entityType: 'calendar_event',
-            entityId: eventId,
-            description: `Updated calendar event: ${title}`,
-            details: { title, event_type, start_date, end_date }
-          });
-        } catch (logErr) {
-          console.error('Error logging activity:', logErr);
-        }
-
         // Fetch the updated event
         const fetchQuery = 'SELECT * FROM calendar_events WHERE id = ?';
         db.query(fetchQuery, [eventId], (err, updatedEvents) => {
@@ -420,20 +392,6 @@ router.delete('/events/:id', (req, res) => {
         if (err) {
           console.error('Error deleting event:', err);
           return res.status(500).json({ message: 'Server error while deleting event' });
-        }
-
-        // Log the activity
-        try {
-          logActivity(db, {
-            userId: req.user?.id,
-            actionType: ACTIVITY_TYPES.CALENDAR_EVENT_DELETED,
-            entityType: 'calendar_event',
-            entityId: eventId,
-            description: `Deleted calendar event: ${eventTitle}`,
-            details: { title: eventTitle }
-          });
-        } catch (logErr) {
-          console.error('Error logging activity:', logErr);
         }
 
         res.json({ success: true, message: 'Event deleted successfully' });

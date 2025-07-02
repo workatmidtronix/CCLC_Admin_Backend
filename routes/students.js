@@ -2,76 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs'); // For password hashing
-const multer = require('multer'); // For handling multipart/form-data
 const { body, validationResult } = require('express-validator'); // For validation
 const fs = require('fs'); // For file system operations
 const path = require('path'); // For path operations
-
-// --- Multer Configuration for File Uploads ---
-// Dynamic storage configuration that creates user-specific folders
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    // Get email from request body (will be available after multer processes the form)
-    const email = req.body.email;
-
-    if (!email) {
-      return cb(new Error('Email is required for file upload'), null);
-    }
-
-    // Create a safe folder name from email (remove special characters)
-    const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-    const userFolder = path.join('uploads', 'students', safeEmail);
-
-    // Create the directory if it doesn't exist
-    if (!fs.existsSync(userFolder)) {
-      fs.mkdirSync(userFolder, { recursive: true });
-    }
-
-    cb(null, userFolder);
-  },
-  filename: function (req, file, cb) {
-    // Map field names to specific file names
-    const fieldToFileName = {
-      'photo': 'profile',
-      'dlUpload': 'DL',
-      'socialSecurityUpload': 'SSN',
-      'taraItaPacketUpload': 'taraIT',
-      'voucherDates': 'voucherDates'
-    };
-
-    // Get the base filename from the mapping
-    const baseFileName = fieldToFileName[file.fieldname] || file.fieldname;
-
-    // Get file extension from original filename
-    const fileExtension = path.extname(file.originalname);
-
-    // Create filename: baseName.extension (e.g., profile.jpg, DL.pdf)
-    const fileName = `${baseFileName}${fileExtension}`;
-
-    cb(null, fileName);
-  }
-});
-
-// Initialize multer upload middleware for multiple fields
-const upload = multer({ storage: storage }).fields([
-  { name: 'photo', maxCount: 1 },
-  { name: 'dlUpload', maxCount: 1 },
-  { name: 'socialSecurityUpload', maxCount: 1 },
-  { name: 'taraItaPacketUpload', maxCount: 1 },
-  { name: 'voucherDates', maxCount: 1 }
-]);
-
-// Helper function to get relative path for database storage
-const getRelativePath = (email, filename) => {
-  const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-  return `/uploads/students/${safeEmail}/${filename}`;
-};
-
-// Helper function to get absolute path for file operations
-const getAbsolutePath = (email, filename) => {
-  const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-  return path.join(__dirname, '..', '..', 'uploads', 'students', safeEmail, filename);
-};
+const { handleStudentFileUpload, getRelativePath, getAbsolutePath } = require('../utils/fileUpload');
 
 // Function to create the 'students' table if it doesn't exist
 const createStudentsTable = (db) => {
@@ -165,7 +99,7 @@ const validateStudent = [
 // @route   POST /api/students
 // @desc    Add new student with file uploads
 // @access  Private
-router.post('/', upload, validateStudent, async (req, res) => {
+router.post('/', handleStudentFileUpload(), validateStudent, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -203,28 +137,24 @@ router.post('/', upload, validateStudent, async (req, res) => {
     } = req.body;
 
     const photoPath = req.files && req.files['photo'] && req.files['photo'][0]
-      ? getRelativePath(email, req.files['photo'][0].filename)
+      ? getRelativePath('student', email, req.files['photo'][0].filename)
       : null;
-
 
     const dlUploadPath = req.files && req.files['dlUpload'] && req.files['dlUpload'][0]
-      ? getRelativePath(email, req.files['dlUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['dlUpload'][0].filename)
       : null;
 
-
     const ssnUploadPath = req.files && req.files['socialSecurityUpload'] && req.files['socialSecurityUpload'][0]
-      ? getRelativePath(email, req.files['socialSecurityUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['socialSecurityUpload'][0].filename)
       : null;
 
     const taraItaPath = req.files && req.files['taraItaPacketUpload'] && req.files['taraItaPacketUpload'][0]
-      ? getRelativePath(email, req.files['taraItaPacketUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['taraItaPacketUpload'][0].filename)
       : null;
-
 
     const voucherDatesPath = req.files && req.files['voucherDates'] && req.files['voucherDates'][0]
-      ? getRelativePath(email, req.files['voucherDates'][0].filename)
+      ? getRelativePath('student', email, req.files['voucherDates'][0].filename)
       : null;
-
 
     // First check if email already exists
     const checkEmailSql = "SELECT id FROM students WHERE email = ?";
@@ -551,18 +481,8 @@ router.put('/:id/status', async (req, res) => {
           return res.status(500).json({ success: false, message: 'Database error while updating status' });
         }
 
-        // Log the activity
+        // Format the response
         const student = existingStudent[0];
-        const activityMessage = `Updated status of student ${student.first_name} ${student.last_name} (ID: ${id}) to ${status}`;
-        
-        // Import and use activity logger if available
-        try {
-          const { logActivity } = require('../utils/activityLogger');
-          logActivity('Student', 'UPDATE', activityMessage, req.user?.id);
-        } catch (loggerError) {
-          console.log('Activity logger not available:', loggerError.message);
-        }
-
         res.json({ 
           success: true, 
           message: `Student status updated to ${status} successfully`,
@@ -643,31 +563,6 @@ router.get('/:id/details', async (req, res) => {
         ORDER BY a.attendance_date DESC
       `;
 
-      // Get grades (if grades table exists)
-      const gradesQuery = `
-        SELECT 
-          g.id,
-          g.student_id,
-          g.points_scored,
-          g.notes,
-          g.created_at,
-          gc.column_name,
-          gc.max_points,
-          gc.include_in_calculation,
-          gcat.category_name,
-          c.course_name,
-          ses.session_name,
-          CONCAT(i.name) as instructor_name
-        FROM grades g
-        LEFT JOIN grade_columns gc ON g.column_id = gc.id
-        LEFT JOIN grade_categories gcat ON gc.category_id = gcat.id
-        LEFT JOIN courses c ON gc.course_id = c.id
-        LEFT JOIN sessions ses ON g.session_id = ses.id
-        LEFT JOIN instructors i ON c.instructor_id = i.id
-        WHERE g.student_id = ?
-        ORDER BY g.created_at DESC
-      `;
-
       // Get signed documents (if documents table exists)
       const documentsQuery = `
         SELECT 
@@ -729,7 +624,6 @@ router.get('/:id/details', async (req, res) => {
       // Execute all queries in parallel
       db.query(workforceQuery, [id], (workforceErr, workforceResults) => {
         db.query(attendanceQuery, [id], (attendanceErr, attendanceResults) => {
-          db.query(gradesQuery, [id], (gradesErr, gradesResults) => {
             db.query(documentsQuery, [id], (documentsErr, documentsResults) => {
               db.query(itaAttendanceQuery, [id], (itaErr, itaResults) => {
                 db.query(previousCoursesQuery, [id], (prevErr, prevResults) => {
@@ -738,7 +632,6 @@ router.get('/:id/details', async (req, res) => {
                   const errors = [];
                   if (workforceErr) errors.push('workforce');
                   if (attendanceErr && !attendanceErr.message.includes("doesn't exist")) errors.push('attendance');
-                  if (gradesErr && !gradesErr.message.includes("doesn't exist")) errors.push('grades');
                   if (documentsErr && !documentsErr.message.includes("doesn't exist")) errors.push('documents');
                   if (itaErr && !itaErr.message.includes("doesn't exist")) errors.push('ita');
                   if (prevErr && !prevErr.message.includes("doesn't exist")) errors.push('previous_courses');
@@ -800,19 +693,6 @@ router.get('/:id/details', async (req, res) => {
                       course: att.course_name
                     })),
 
-                    // Grades
-                    grades: gradesErr ? [] : gradesResults.map(grade => ({
-                      id: grade.id,
-                      session: grade.session_name,
-                      category: grade.category_name,
-                      name: grade.column_name,
-                      maxPoints: grade.max_points,
-                      pointsScored: grade.points_scored,
-                      includeInCalculation: grade.include_in_calculation,
-                      instructor: grade.instructor_name,
-                      date: grade.created_at
-                    })),
-
                     // Signed documents
                     documents: documentsErr ? [] : documentsResults.map(doc => ({
                       id: doc.id,
@@ -854,7 +734,6 @@ router.get('/:id/details', async (req, res) => {
                   res.json({
                     success: true,
                     studentDetails
-                  });
                 });
               });
             });
@@ -910,6 +789,119 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting student:', error);
     res.status(500).json({ success: false, message: 'Server error while deleting student' });
+  }
+});
+
+// POST request to save enrollment forms
+router.post('/enrollment-forms', handleStudentFileUpload(), async (req, res) => {
+  try {
+    console.log("Enrollment form data received:", req.body);
+    
+    const db = req.app.locals.db;
+    const formData = req.body;
+    
+    // Check if student with this email already exists
+    const [existingStudents] = await db.promise().query(
+      'SELECT id FROM students WHERE email = ?',
+      [formData.enroll_email]
+    );
+
+    if (existingStudents.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student is not registered. Please register as a student first before submitting enrollment forms.'
+      });
+    }
+
+    const studentId = existingStudents[0].id;
+    console.log(`Found existing student with ID: ${studentId}`);
+
+    // Save enrollment form data to enrollment_forms table
+    const enrollmentData = {
+      student_id: studentId,
+      form_data: JSON.stringify(formData),
+      created_at: new Date()
+    };
+
+    // Insert enrollment form data
+    const [enrollmentResult] = await db.promise().query(
+      'INSERT INTO enrollment_forms SET ?',
+      enrollmentData
+    );
+
+    console.log(`Enrollment form saved with ID: ${enrollmentResult.insertId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Enrollment form submitted successfully',
+      studentId: studentId,
+      enrollmentId: enrollmentResult.insertId
+    });
+
+  } catch (error) {
+    console.error('Error saving enrollment form:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error saving enrollment form',
+      error: error.message
+    });
+  }
+});
+
+// GET request to retrieve student enrollment forms by email
+router.get('/enrollment-forms/:email', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const { email } = req.params;
+
+    // First check if student with this email exists
+    const [existingStudents] = await db.promise().query(
+      'SELECT id, first_name, last_name, email FROM students WHERE email = ?',
+      [email]
+    );
+
+    if (existingStudents.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found with this email address.'
+      });
+    }
+
+    const student = existingStudents[0];
+
+    // Get all enrollment forms for this student
+    const [enrollmentForms] = await db.promise().query(
+      'SELECT id, form_data, created_at FROM enrollment_forms WHERE student_id = ? ORDER BY created_at DESC',
+      [student.id]
+    );
+
+    // Parse the JSON form_data for each enrollment form
+    const formattedEnrollmentForms = enrollmentForms.map(form => ({
+      id: form.id,
+      formData: JSON.parse(form.form_data),
+      submittedAt: form.created_at
+    }));
+
+    res.json({
+      success: true,
+      message: 'Enrollment forms retrieved successfully',
+      student: {
+        id: student.id,
+        firstName: student.first_name,
+        lastName: student.last_name,
+        email: student.email
+      },
+      enrollmentForms: formattedEnrollmentForms,
+      totalForms: formattedEnrollmentForms.length
+    });
+
+  } catch (error) {
+    console.error('Error retrieving enrollment forms:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving enrollment forms',
+      error: error.message
+    });
   }
 });
 

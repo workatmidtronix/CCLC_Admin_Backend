@@ -2,102 +2,102 @@ const express = require('express');
 const router = express.Router();
 
 // Fetch all courses
-router.get('/', (req, res) => {
-  const db = req.app.locals.db;
+router.get('/', async (req, res) => {
+  try {
+    const db = req.app.locals.db.promise();
 
-  const query = `
-    SELECT 
-      c.*,
-      i.name as instructor_name
-    FROM courses c
-    LEFT JOIN instructors i ON c.instructor_id = i.id
-    ORDER BY c.created_at DESC
-  `;
+    const query = `
+      SELECT 
+        c.*,
+        i.name as instructor_name
+      FROM courses c
+      LEFT JOIN instructors i ON c.instructor_id = i.id
+      ORDER BY c.created_at DESC
+    `;
 
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching courses:', err);
-      return res.status(500).json({ success: false, message: 'Server error' });
-    }
+    const [results] = await db.query(query);
     res.json({ success: true, courses: results });
-  });
+  } catch (error) {
+    console.error('Error fetching courses:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
 // Fetch single course by ID
-router.get('/:id', (req, res) => {
-  const db = req.app.locals.db;
-  const { id } = req.params;
+router.get('/:id', async (req, res) => {
+  try {
+    const db = req.app.locals.db.promise();
+    const { id } = req.params;
 
-  const query = `
-    SELECT 
-      c.*,
-      i.name as instructor_name
-    FROM courses c
-    LEFT JOIN instructors i ON c.instructor_id = i.id
-    WHERE c.id = ?
-  `;
+    const query = `
+      SELECT 
+        c.*,
+        i.name as instructor_name
+      FROM courses c
+      LEFT JOIN instructors i ON c.instructor_id = i.id
+      WHERE c.id = ?
+    `;
 
-  db.query(query, [id], (err, results) => {
-    if (err) {
-      console.error('Error fetching course:', err);
-      return res.status(500).json({ success: false, message: 'Server error' });
-    }
+    const [results] = await db.query(query, [id]);
     if (results.length === 0) {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
     res.json({ success: true, course: results[0] });
-  });
+  } catch (error) {
+    console.error('Error fetching course:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
 // Add new course
-router.post('/', (req, res) => {
-  const db = req.app.locals.db;
-  const {
-    courseName,
-    courseCode,
-    description,
-    durationWeeks,
-    instructorId,
-    maxStudents,
-    status,
-    startDate,
-    endDate
-  } = req.body;
+router.post('/', async (req, res) => {
+  try {
+    const db = req.app.locals.db.promise();
+    const {
+      courseName,
+      courseCode,
+      description,
+      durationWeeks,
+      instructorId,
+      maxStudents,
+      status,
+      startDate,
+      endDate
+    } = req.body;
 
-  // Validate required fields
-  if (!courseName) {
-    return res.status(400).json({
-      success: false,
-      message: 'Course name is required'
-    });
-  }
-
-  const query = `
-    INSERT INTO courses (
-      course_name, course_code, description, duration_weeks, 
-      instructor_id, max_students, status, start_date, end_date
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  const values = [
-    courseName,
-    courseCode || null,
-    description || null,
-    durationWeeks || null,
-    instructorId || null,
-    maxStudents || 25,
-    status || 'Active',
-    startDate || null,
-    endDate || null
-  ];
-
-  db.query(query, values, (err, result) => {
-    if (err) {
-      console.error('Error adding course:', err);
-      return res.status(500).json({ success: false, message: 'Error adding course' });
+    // Validate required fields
+    if (!courseName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Course name is required'
+      });
     }
+
+    const query = `
+      INSERT INTO courses (
+        course_name, course_code, description, duration_weeks, 
+        instructor_id, max_students, status, start_date, end_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      courseName,
+      courseCode || null,
+      description || null,
+      durationWeeks || null,
+      instructorId || null,
+      maxStudents || 25,
+      status || 'Active',
+      startDate || null,
+      endDate || null
+    ];
+
+    const [result] = await db.query(query, values);
     res.status(201).json({ success: true, message: 'Course added successfully', courseId: result.insertId });
-  });
+  } catch (error) {
+    console.error('Error adding course:', error);
+    res.status(500).json({ success: false, message: 'Error adding course' });
+  }
 });
 
 // Update course
