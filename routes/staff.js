@@ -1,24 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
-
-// Multer storage for staff photo
-const staffStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const email = req.body.email;
-    if (!email) return cb(new Error('Email is required for file upload'), null);
-    const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-    const dir = path.join('uploads', 'staff', safeEmail);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, 'profileImage' + path.extname(file.originalname));
-  }
-});
-const upload = multer({ storage: staffStorage });
+const { handleSingleFileUpload, getRelativePath } = require('../utils/fileUpload');
 
 // Create staff table if not exists
 const createStaffTable = (db) => {
@@ -51,16 +33,19 @@ const createStaffTable = (db) => {
 };
 
 // Add Staff Member
-router.post('/add', upload.single('photo'), async (req, res) => {
+router.post('/add', handleSingleFileUpload('staff', 'photo'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     await createStaffTable(db);
     const {
       name, salutation, contact_number, email, qualification, date_of_birth, gender, marital_status, status, address_line1, address_line2, city, state, postal_code, country
     } = req.body;
-    const photo = req.file ? `/uploads/staff/${email.replace(/[^a-zA-Z0-9]/g, '_')}/${req.file.filename}` : null;
+    
+    const photo = req.file ? getRelativePath('staff', email, req.file.filename) : null;
+    
     const sql = `INSERT INTO staff (name, salutation, contact_number, email, qualification, date_of_birth, gender, marital_status, photo, status, address_line1, address_line2, city, state, postal_code, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const values = [name, salutation, contact_number, email, qualification, date_of_birth, gender, marital_status, photo, status, address_line1, address_line2, city, state, postal_code, country];
+    
     db.query(sql, values, (err, result) => {
       if (err) return res.status(500).json({ success: false, message: 'Database error', error: err });
       res.json({ success: true, message: 'Staff member added successfully' });
@@ -133,7 +118,7 @@ router.get('/instructors', async (req, res) => {
 });
 
 // Edit Staff Member
-router.post('/edit/:id', upload.single('photo'), async (req, res) => {
+router.post('/edit/:id', handleSingleFileUpload('staff', 'photo'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     await createStaffTable(db);
@@ -141,18 +126,22 @@ router.post('/edit/:id', upload.single('photo'), async (req, res) => {
     const {
       name, salutation, contact_number, email, qualification, date_of_birth, gender, marital_status, status, address_line1, address_line2, city, state, postal_code, country
     } = req.body;
+    
     let photo = null;
     if (req.file) {
-      photo = `/uploads/staff/${email.replace(/[^a-zA-Z0-9]/g, '_')}/${req.file.filename}`;
+      photo = getRelativePath('staff', email, req.file.filename);
     }
+    
     let sql = `UPDATE staff SET name=?, salutation=?, contact_number=?, email=?, qualification=?, date_of_birth=?, gender=?, marital_status=?, status=?, address_line1=?, address_line2=?, city=?, state=?, postal_code=?, country=?`;
     const values = [name, salutation, contact_number, email, qualification, date_of_birth, gender, marital_status, status, address_line1, address_line2, city, state, postal_code, country];
+    
     if (photo) {
       sql += ', photo=?';
       values.push(photo);
     }
     sql += ' WHERE id=?';
     values.push(id);
+    
     db.query(sql, values, (err, result) => {
       if (err) return res.status(500).json({ success: false, message: 'Database error', error: err });
       if (result.affectedRows === 0) return res.status(404).json({ success: false, message: 'Staff member not found' });
@@ -180,7 +169,7 @@ router.delete('/delete/:id', async (req, res) => {
 });
 
 // Edit Instructor
-router.post('/edit-instructor/:id', upload.single('photo'), async (req, res) => {
+router.post('/edit-instructor/:id', handleSingleFileUpload('instructor', 'photo'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     // Create instructors table if not exists (reuse the function from instructors route)
@@ -222,18 +211,22 @@ router.post('/edit-instructor/:id', upload.single('photo'), async (req, res) => 
     const {
       instructor_id, name, salutation, contact_number, email, qualification, course, date_of_birth, gender, marital_status, department, designation, status, address_line1, address_line2, city, state, postal_code, country
     } = req.body;
+    
     let photo = null;
     if (req.file) {
-      photo = `/uploads/instructor/${email.replace(/[^a-zA-Z0-9]/g, '_')}/${req.file.filename}`;
+      photo = getRelativePath('instructor', email, req.file.filename);
     }
+    
     let sql = `UPDATE instructors SET instructor_id=?, name=?, salutation=?, contact_number=?, email=?, qualification=?, course=?, date_of_birth=?, gender=?, marital_status=?, department=?, designation=?, status=?, address_line1=?, address_line2=?, city=?, state=?, postal_code=?, country=?`;
     const values = [instructor_id, name, salutation, contact_number, email, qualification, course, date_of_birth, gender, marital_status, department, designation, status, address_line1, address_line2, city, state, postal_code, country];
+    
     if (photo) {
       sql += ', photo=?';
       values.push(photo);
     }
     sql += ' WHERE id=?';
     values.push(id);
+    
     db.query(sql, values, (err, result) => {
       if (err) return res.status(500).json({ success: false, message: 'Database error', error: err });
       if (result.affectedRows === 0) return res.status(404).json({ success: false, message: 'Instructor not found' });

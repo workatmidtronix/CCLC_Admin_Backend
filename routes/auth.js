@@ -26,70 +26,56 @@ router.post('/signup', [
 
     // Destructure request body
     const { loginID, password, role, firstName, lastName, email } = req.body;
-    // Access the database connection from app locals
+    // Access the database promise interface from app locals
     const db = req.app.locals.db;
 
     // Check if user already exists based on loginID or email
     const checkSql = "SELECT id FROM users WHERE login_id = ? OR email = ?";
-    db.query(checkSql, [loginID, email], async (checkErr, checkResult) => {
-      if (checkErr) {
-        console.error("Error checking user existence:", checkErr);
-        return res.status(500).json({ message: "Database error during user check" });
+    const [checkResult] = await db.query(checkSql, [loginID, email]);
+
+    // If a user with the given loginID or email is found, return an error
+    if (checkResult.length > 0) {
+      return res.status(400).json({ message: "User with this login ID or email already exists" });
+    }
+
+    // Store password as plain text (no hashing)
+    const insertSql = `
+      INSERT INTO users (login_id, password, role, first_name, last_name, email)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    const [insertResult] = await db.query(insertSql, [loginID, password, role, firstName, lastName, email]);
+
+    // Prepare JWT payload with user details
+    const payload = {
+      user: {
+        id: insertResult.insertId,
+        loginID,
+        role
       }
+    };
 
-      // If a user with the given loginID or email is found, return an error
-      if (checkResult.length > 0) {
-        return res.status(400).json({ message: "User with this login ID or email already exists" });
+    // Sign the JWT token
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: process.env.JWT_EXPIRE || '24h' }
+    );
+
+    // Respond with success message, token, and user details
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: insertResult.insertId,
+        loginID,
+        role,
+        firstName,
+        lastName,
+        email
       }
-
-      // Store password as plain text (no hashing)
-      const insertSql = `
-              INSERT INTO users (login_id, password, role, first_name, last_name, email)
-              VALUES (?, ?, ?, ?, ?, ?)
-          `;
-
-      db.query(insertSql, [loginID, password, role, firstName, lastName, email], (insertErr, insertResult) => {
-        if (insertErr) {
-          console.error("Error creating user:", insertErr);
-          return res.status(500).json({ message: "Error creating user" });
-        }
-
-        // Prepare JWT payload with user details
-        const payload = {
-          user: {
-            id: insertResult.insertId,
-            loginID,
-            role
-          }
-        };
-
-        // Sign the JWT token
-        jwt.sign(
-          payload,
-          process.env.JWT_SECRET || 'your-secret-key',
-          { expiresIn: process.env.JWT_EXPIRE || '24h' },
-          (err, token) => {
-            if (err) {
-              console.error("Error signing JWT:", err);
-              return res.status(500).json({ message: "Failed to generate token" });
-            }
-            // Respond with success message, token, and user details
-            res.json({
-              success: true,
-              token,
-              user: {
-                id: insertResult.insertId,
-                loginID,
-                role,
-                firstName,
-                lastName,
-                email
-              }
-            });
-          }
-        );
-      });
     });
+
   } catch (error) {
     console.error("Server error during signup:", error.message);
     res.status(500).json({ message: "Server error" });
@@ -103,70 +89,64 @@ router.post('/login', [
   body('loginID').notEmpty().withMessage('Login ID is required'),
   body('password').exists().withMessage('Password is required'),
   body('role').isIn(['admin', 'staff']).withMessage('Invalid role')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  const { loginID, password, role } = req.body;
+  console.log(req.body)
+  const db = req.app.locals.db;
+  
+  // Get user from database using callback style
+  const sql = "SELECT * FROM users WHERE login_id = ? AND role = ?";
+  db.query(sql, [loginID, role], (err, results) => {
+    if (err) {
+      console.error("Database error during login:", err);
+      return res.status(500).json({ message: "Server error" });
     }
 
-    const { loginID, password, role } = req.body;
-    const db = req.app.locals.db;
-    
-    // Get user from database
-    const sql = "SELECT * FROM users WHERE login_id = ? AND role = ? ";
-    db.query(sql, [loginID, role], async (err, results) => {
-      if (err) {
-        console.error("Database error:", err);
-        return res.status(500).json({ message: "Database error" });
+    if (results.length === 0) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const user = results[0];
+
+    // Compare passwords directly (plain text)
+    if (password !== user.password) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // Create JWT payload
+    const payload = {
+      user: {
+        id: user.id,
+        loginID: user.login_id,
+        role: user.role
       }
+    };
 
-      if (results.length === 0) {
-        return res.status(401).json({ message: "Invalid credentials" });
+    // Sign token
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: process.env.JWT_EXPIRE || '24h' }
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        loginID: user.login_id,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email
       }
-
-      const user = results[0];
-
-      // Compare passwords directly (plain text)
-      if (password !== user.password) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
-
-      // Create JWT payload
-      const payload = {
-        user: {
-          id: user.id,
-          loginID: user.login_id,
-          role: user.role
-        }
-      };
-
-      // Sign token
-      jwt.sign(
-        payload,
-        process.env.JWT_SECRET || 'your-secret-key',
-        { expiresIn: process.env.JWT_EXPIRE || '24h' },
-        (err, token) => {
-          if (err) throw err;
-          res.json({
-            success: true,
-            token,
-            user: {
-              id: user.id,
-              loginID: user.login_id,
-              role: user.role,
-              firstName: user.first_name,
-              lastName: user.last_name,
-              email: user.email
-            }
-          });
-        }
-      );
     });
-  } catch (error) {
-    console.error("Server error during login:", error.message);
-    res.status(500).json({ message: "Server error" });
-  }
+  });
 });
 
 // @route   POST /api/auth/verify

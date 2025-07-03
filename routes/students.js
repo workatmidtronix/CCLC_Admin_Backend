@@ -2,148 +2,82 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs'); // For password hashing
-const multer = require('multer'); // For handling multipart/form-data
 const { body, validationResult } = require('express-validator'); // For validation
 const fs = require('fs'); // For file system operations
 const path = require('path'); // For path operations
-
-// --- Multer Configuration for File Uploads ---
-// Dynamic storage configuration that creates user-specific folders
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    // Get email from request body (will be available after multer processes the form)
-    const email = req.body.email;
-
-    if (!email) {
-      return cb(new Error('Email is required for file upload'), null);
-    }
-
-    // Create a safe folder name from email (remove special characters)
-    const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-    const userFolder = path.join('uploads', 'students', safeEmail);
-
-    // Create the directory if it doesn't exist
-    if (!fs.existsSync(userFolder)) {
-      fs.mkdirSync(userFolder, { recursive: true });
-    }
-
-    cb(null, userFolder);
-  },
-  filename: function (req, file, cb) {
-    // Map field names to specific file names
-    const fieldToFileName = {
-      'photo': 'profile',
-      'dlUpload': 'DL',
-      'socialSecurityUpload': 'SSN',
-      'taraItaPacketUpload': 'taraIT',
-      'voucherDates': 'voucherDates'
-    };
-
-    // Get the base filename from the mapping
-    const baseFileName = fieldToFileName[file.fieldname] || file.fieldname;
-
-    // Get file extension from original filename
-    const fileExtension = path.extname(file.originalname);
-
-    // Create filename: baseName.extension (e.g., profile.jpg, DL.pdf)
-    const fileName = `${baseFileName}${fileExtension}`;
-
-    cb(null, fileName);
-  }
-});
-
-// Initialize multer upload middleware for multiple fields
-const upload = multer({ storage: storage }).fields([
-  { name: 'photo', maxCount: 1 },
-  { name: 'dlUpload', maxCount: 1 },
-  { name: 'socialSecurityUpload', maxCount: 1 },
-  { name: 'taraItaPacketUpload', maxCount: 1 },
-  { name: 'voucherDates', maxCount: 1 }
-]);
-
-// Helper function to get relative path for database storage
-const getRelativePath = (email, filename) => {
-  const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-  return `/uploads/students/${safeEmail}/${filename}`;
-};
-
-// Helper function to get absolute path for file operations
-const getAbsolutePath = (email, filename) => {
-  const safeEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
-  return path.join(__dirname, '..', '..', 'uploads', 'students', safeEmail, filename);
-};
+const { handleStudentFileUpload, getRelativePath, getAbsolutePath } = require('../utils/fileUpload');
 
 // Function to create the 'students' table if it doesn't exist
-// const createStudentsTable = (db) => {
-//   return new Promise((resolve, reject) => {
-//     const createTableSql = `
-//             CREATE TABLE IF NOT EXISTS students (
-//                 id INT AUTO_INCREMENT PRIMARY KEY,
-//                 login_id VARCHAR(255) UNIQUE NOT NULL,
-//                 -- IMPORTANT: If students use this password for login, it MUST be hashed!
-//                 -- Add a VARCHAR(255) type for the password field if you include it.
-//                 password VARCHAR(255), 
-//                 first_name VARCHAR(255) NOT NULL,
-//                 last_name VARCHAR(255) NOT NULL,
-//                 email VARCHAR(255),
-//                 phone VARCHAR(20),
-//                 date_of_birth DATE,
-//                 address_line1 VARCHAR(255),
-//                 city VARCHAR(100),
-//                 state VARCHAR(100),
-//                 postal_code VARCHAR(20),
-//                 country VARCHAR(100),
-//                 registration_number VARCHAR(255) UNIQUE,
-//                 date_of_joining DATE,
-//                 gender VARCHAR(50),
-//                 religion VARCHAR(100),
-//                 nationality VARCHAR(100),
-//                 photo VARCHAR(255), -- Store URL/path to photo
-//                 course VARCHAR(255),
-//                 department VARCHAR(255),
-//                 student_notes TEXT,
-//                 session VARCHAR(100),
-//                 drivers_license VARCHAR(255),
-//                 dl_upload VARCHAR(255), -- Store URL/path to DL upload
-//                 student_pcp_info TEXT,
-//                 student_pcp_phone VARCHAR(20),
-//                 status VARCHAR(50),
-//                 semester VARCHAR(50),
-//                 social_security_number VARCHAR(255),
-//                 social_security_upload VARCHAR(255), -- Store URL/path to SSN upload
-//                 emergency_contact_info TEXT,
-//                 emergency_contact_phone VARCHAR(20),
-//                 other_emergency_contact TEXT,
-//                 caseworker_name VARCHAR(255),
-//                 workforce_center VARCHAR(255),
-//                 tara_ita_packet_upload VARCHAR(255), -- Store URL/path to upload
-//                 tara_ita_completion_date DATE,
-//                 voucher_dates TEXT, -- Changed to TEXT to store path or list of dates
-//                 info_session_date DATE,
-//                 notes TEXT,
-//                 course_pref1 VARCHAR(255),
-//                 days_pref1 VARCHAR(255),
-//                 location_pref1 VARCHAR(255),
-//                 course_pref2 VARCHAR(255),
-//                 days_pref2 VARCHAR(255),
-//                 location_pref2 VARCHAR(255),
-//                 attended_info_session BOOLEAN,
-//                 info_session_location VARCHAR(255),
-//                 additional_comments TEXT,
-//                 signature TEXT, -- Changed from VARCHAR(255) to TEXT to store Base64 string
-//                 name_capitalization VARCHAR(100),
-//                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-//             );
-//         `;
-//     db.query(createTableSql, (err) => {
-//       if (err) {
-//         console.error("Error creating students table:", err);
-//         return reject(new Error("Failed to create students table."));
-//       }
-//       resolve();
-//     });
-//   });
-// };
+const createStudentsTable = (db) => {
+  return new Promise((resolve, reject) => {
+    const createTableSql = `
+            CREATE TABLE IF NOT EXISTS students (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                login_id VARCHAR(255)  NOT NULL,
+                -- IMPORTANT: If students use this password for login, it MUST be hashed!
+                -- Add a VARCHAR(255) type for the password field if you include it.
+                password VARCHAR(255), 
+                first_name VARCHAR(255) NOT NULL,
+                last_name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) UNIQUE,
+                phone VARCHAR(20),
+                date_of_birth DATE,
+                address_line1 VARCHAR(255),
+                city VARCHAR(100),
+                state VARCHAR(100),
+                postal_code VARCHAR(20),
+                country VARCHAR(100),
+                registration_number VARCHAR(255) UNIQUE,
+                date_of_joining DATE,
+                gender VARCHAR(50),
+                religion VARCHAR(100),
+                nationality VARCHAR(100),
+                photo VARCHAR(255), -- Store URL/path to photo
+                course VARCHAR(255),
+                department VARCHAR(255),
+                student_notes TEXT,
+                session VARCHAR(100),
+                drivers_license VARCHAR(255),
+                dl_upload VARCHAR(255), -- Store URL/path to DL upload
+                student_pcp_info TEXT,
+                student_pcp_phone VARCHAR(20),
+                status VARCHAR(50),
+                semester VARCHAR(50),
+                social_security_number VARCHAR(255),
+                social_security_upload VARCHAR(255), -- Store URL/path to SSN upload
+                emergency_contact_info TEXT,
+                emergency_contact_phone VARCHAR(20),
+                other_emergency_contact TEXT,
+                caseworker_name VARCHAR(255),
+                workforce_center VARCHAR(255),
+                tara_ita_packet_upload VARCHAR(255), -- Store URL/path to upload
+                tara_ita_completion_date DATE,
+                voucher_dates TEXT, -- Changed to TEXT to store path or list of dates
+                info_session_date DATE,
+                notes TEXT,
+                course_pref1 VARCHAR(255),
+                days_pref1 VARCHAR(255),
+                location_pref1 VARCHAR(255),
+                course_pref2 VARCHAR(255),
+                days_pref2 VARCHAR(255),
+                location_pref2 VARCHAR(255),
+                attended_info_session BOOLEAN,
+                info_session_location VARCHAR(255),
+                additional_comments TEXT,
+                signature TEXT, -- Changed from VARCHAR(255) to TEXT to store Base64 string
+                name_capitalization VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `;
+    db.query(createTableSql, (err) => {
+      if (err) {
+        console.error("Error creating students table:", err);
+        return reject(new Error("Failed to create students table."));
+      }
+      resolve();
+    });
+  });
+};
 
 // Validation middleware
 const validateStudent = [
@@ -165,9 +99,7 @@ const validateStudent = [
 // @route   POST /api/students
 // @desc    Add new student with file uploads
 // @access  Private
-router.post('/', upload, validateStudent, async (req, res) => {
-
-  console.log("Target req.body", req.body);
+router.post('/', handleStudentFileUpload(), validateStudent, async (req, res) => {
   try {
     const errors = validationResult(req);
     
@@ -184,12 +116,11 @@ router.post('/', upload, validateStudent, async (req, res) => {
           });
         });
       }
-      console.log("Data Validation Phase 2 error:", errors);
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const db = req.app.locals.db;
-    // await createStudentsTable(db);
+    await createStudentsTable(db);
 
     // Destructure fields from req.body
     const {
@@ -206,29 +137,27 @@ router.post('/', upload, validateStudent, async (req, res) => {
       gender, religion, nationality, registrationNumber, dateOfJoining
     } = req.body;
 
-    const photoPath = req.files && req.files['photo'] && req.files['photo'][0]
-      ? getRelativePath(email, req.files['photo'][0].filename)
-      : null;
+    console.log("Login ID storing as student", loginId);
 
+    const photoPath = req.files && req.files['photo'] && req.files['photo'][0]
+      ? getRelativePath('student', email, req.files['photo'][0].filename)
+      : null;
 
     const dlUploadPath = req.files && req.files['dlUpload'] && req.files['dlUpload'][0]
-      ? getRelativePath(email, req.files['dlUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['dlUpload'][0].filename)
       : null;
 
-
     const ssnUploadPath = req.files && req.files['socialSecurityUpload'] && req.files['socialSecurityUpload'][0]
-      ? getRelativePath(email, req.files['socialSecurityUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['socialSecurityUpload'][0].filename)
       : null;
 
     const taraItaPath = req.files && req.files['taraItaPacketUpload'] && req.files['taraItaPacketUpload'][0]
-      ? getRelativePath(email, req.files['taraItaPacketUpload'][0].filename)
+      ? getRelativePath('student', email, req.files['taraItaPacketUpload'][0].filename)
       : null;
-
 
     const voucherDatesPath = req.files && req.files['voucherDates'] && req.files['voucherDates'][0]
-      ? getRelativePath(email, req.files['voucherDates'][0].filename)
+      ? getRelativePath('student', email, req.files['voucherDates'][0].filename)
       : null;
-
 
     // First check if email already exists
     const checkEmailSql = "SELECT id FROM students WHERE email = ?";
@@ -269,229 +198,75 @@ router.post('/', upload, validateStudent, async (req, res) => {
         });
       }
 
-      // If email is unique, then check login ID
-      const checkLoginSql = "SELECT id FROM students WHERE login_id = ?";
-      db.query(checkLoginSql, [loginId], async (loginErr, loginResult) => {
-        if (loginErr) {
-          console.error("Error checking login ID existence:", loginErr);
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
-            });
-          }
-          return res.status(500).json({ success: false, message: "Database error" });
-        }
+      // Email is unique, proceed with registration
+      try {
+        // Hash password
 
-        if (loginResult.length > 0) {
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
-            });
-          }
-          return res.status(400).json({
-            success: false,
-            message: "Student with this login ID already exists"
-          });
-        }
 
-        // Both email and login ID are unique, proceed with registration
-        try {
-          // Hash password
-          const salt = await bcrypt.genSalt(10);
-          const hashedPassword = await bcrypt.hash(password, salt);
+        // Insert student record
+        const insertSql = `
+          INSERT INTO students (
+              login_id, password, first_name, last_name, email, phone,
+              date_of_birth, course, department, student_notes, session,
+              drivers_license, dl_upload, student_pcp_info, student_pcp_phone,
+              status, semester, social_security_number, social_security_upload,
+              emergency_contact_info, emergency_contact_phone, other_emergency_contact,
+              caseworker_name, workforce_center, tara_ita_packet_upload,
+              tara_ita_completion_date, voucher_dates, info_session_date,
+              notes, course_pref1, days_pref1, location_pref1, course_pref2,
+              days_pref2, location_pref2, attended_info_session, info_session_location,
+              additional_comments, signature, name_capitalization, photo,
+              address_line1, city, state, postal_code, country,
+              gender, religion, nationality,registration_number,date_of_joining
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
 
-          // Insert student record
-          const insertSql = `
-            INSERT INTO students (
-                login_id, password, first_name, last_name, email, phone,
-                date_of_birth, course, department, student_notes, session,
-                drivers_license, dl_upload, student_pcp_info, student_pcp_phone,
-                status, semester, social_security_number, social_security_upload,
-                emergency_contact_info, emergency_contact_phone, other_emergency_contact,
-                caseworker_name, workforce_center, tara_ita_packet_upload,
-                tara_ita_completion_date, voucher_dates, info_session_date,
-                notes, course_pref1, days_pref1, location_pref1, course_pref2,
-                days_pref2, location_pref2, attended_info_session, info_session_location,
-                additional_comments, signature, name_capitalization, photo,
-                address_line1, city, state, postal_code, country,
-                gender, religion, nationality,registration_number,date_of_joining
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `;
+        const attendedInfoSessionValue = attendedInfoSession === "true" ? 1 : 0;
 
-          const attendedInfoSessionValue = attendedInfoSession === "true" ? 1 : 0;
+        const values = [
+          loginId, password, firstName, lastName, email, phone,
+          dateOfBirth, course, department, studentNotes, session,
+          driversLicense, dlUploadPath, studentPcpInfo, studentPcpPhone,
+          status || 'Active', semester, socialSecurityNumber, ssnUploadPath,
+          emergencyContactInfo, emergencyContactPhone, otherEmergencyContact,
+          caseworkerName, workforceCenter, taraItaPath,
+          taraItaCompletionDate, voucherDatesPath, infoSessionDate,
+          notes, coursePref1, daysPref1, locationPref1, coursePref2,
+          daysPref2, locationPref2, attendedInfoSessionValue, infoSessionLocation,
+          additionalComments, signature, nameCapitalization, photoPath,
+          addressLine1, city, state, postalCode, country,
+          gender, religion, nationality, registrationNumber, dateOfJoining
+        ];
 
-          const values = [
-            loginId, hashedPassword, firstName, lastName, email, phone,
-            dateOfBirth, course, department, studentNotes, session,
-            driversLicense, dlUploadPath, studentPcpInfo, studentPcpPhone,
-            status || 'Active', semester, socialSecurityNumber, ssnUploadPath,
-            emergencyContactInfo, emergencyContactPhone, otherEmergencyContact,
-            caseworkerName, workforceCenter, taraItaPath,
-            taraItaCompletionDate, voucherDatesPath, infoSessionDate,
-            notes, coursePref1, daysPref1, locationPref1, coursePref2,
-            daysPref2, locationPref2, attendedInfoSessionValue, infoSessionLocation,
-            additionalComments, signature, nameCapitalization, photoPath,
-            addressLine1, city, state, postalCode, country,
-            gender, religion, nationality, registrationNumber, dateOfJoining
-          ];
-
-          db.query(insertSql, values, (insertErr, insertResult) => {
-            if (insertErr) {
-              console.error("Error inserting student:", insertErr);
-              // Clean up uploaded files
-              if (req.files) {
-                Object.values(req.files).forEach(fileArray => {
-                  fileArray.forEach(file => {
-                    try {
-                      fs.unlinkSync(file.path);
-                    } catch (unlinkError) {
-                      console.error('Error deleting file:', unlinkError);
-                    }
-                  });
+        db.query(insertSql, values, (insertErr, insertResult) => {
+          if (insertErr) {
+            console.error("Error inserting student:", insertErr);
+            // Clean up uploaded files
+            if (req.files) {
+              Object.values(req.files).forEach(fileArray => {
+                fileArray.forEach(file => {
+                  try {
+                    fs.unlinkSync(file.path);
+                  } catch (unlinkError) {
+                    console.error('Error deleting file:', unlinkError);
+                  }
                 });
-              }
-              console.log("Error creating student record", insertErr);
-              return res.status(500).json({
-                success: false,
-                message: "Error creating student record"
               });
             }
-
-            res.json({
-              success: true,
-              message: "Student registered successfully",
-              studentId: insertResult.insertId
-            });
-          });
-        } catch (hashError) {
-          console.error("Error hashing password:", hashError);
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
+            return res.status(500).json({
+              success: false,
+              message: "Error creating student record"
             });
           }
-          return res.status(500).json({
-            success: false,
-            message: "Error processing registration"
-          });
-        }
-      });
-    });
-  } catch (error) {
-    console.error("Server error in POST /students:", error);
-    // Clean up uploaded files
-    if (req.files) {
-      Object.values(req.files).forEach(fileArray => {
-        fileArray.forEach(file => {
-          try {
-            fs.unlinkSync(file.path);
-          } catch (unlinkError) {
-            console.error('Error deleting file:', unlinkError);
-          }
-        });
-      });
-    }
-    res.status(500).json({
-      success: false,
-      message: "Server error while registering student"
-    });
-  }
-});
 
-router.post('/joomla-registration', upload, validateStudent, async (req, res) => {
-  console.log("Target req.body", req.body);
-  console.log("req.files", req.files);
-  
-  try {
-    const errors = validationResult(req);
-    
-    if (!errors.isEmpty()) {
-      // Clean up any uploaded files if validation fails
-      if (req.files) {
-        console.log("req.files", req.files);
-        Object.values(req.files).forEach(fileArray => {
-          fileArray.forEach(file => {
-            try {
-              fs.unlinkSync(file.path);
-            } catch (unlinkError) {
-              console.error('Error deleting file:', unlinkError);
-            }
+          res.json({
+            success: true,
+            message: "Student registered successfully",
+            studentId: insertResult.insertId
           });
         });
-      }
-      console.log("Data Validation Phase 2 error:", errors);
-      return res.status(400).json({ success: false, errors: errors.array() });
-    }
-
-    const db = req.app.locals.db;
-    // await createStudentsTable(db);
-
-    // Destructure fields from req.body
-    const {
-      firstName, lastName, email, phone, dateOfBirth,
-      loginId, password, course, department, studentNotes,
-      session, driversLicense, studentPcpInfo, studentPcpPhone,
-      status, semester, socialSecurityNumber, emergencyContactInfo,
-      emergencyContactPhone, otherEmergencyContact, caseworkerName,
-      workforceCenter, taraItaCompletionDate, infoSessionDate,
-      notes, coursePref1, daysPref1, locationPref1, coursePref2,
-      daysPref2, locationPref2, attendedInfoSession, infoSessionLocation,
-      additionalComments, signature, nameCapitalization,
-      addressLine1, city, state, postalCode, country,
-      gender, religion, nationality, registrationNumber, dateOfJoining
-    } = req.body;
-
-    const photoPath = req.files && req.files['photo'] && req.files['photo'][0]
-      ? getRelativePath(email, req.files['photo'][0].filename)
-      : null;
-
-
-    const dlUploadPath = req.files && req.files['dlUpload'] && req.files['dlUpload'][0]
-      ? getRelativePath(email, req.files['dlUpload'][0].filename)
-      : null;
-
-
-    const ssnUploadPath = req.files && req.files['socialSecurityUpload'] && req.files['socialSecurityUpload'][0]
-      ? getRelativePath(email, req.files['socialSecurityUpload'][0].filename)
-      : null;
-
-    const taraItaPath = req.files && req.files['taraItaPacketUpload'] && req.files['taraItaPacketUpload'][0]
-      ? getRelativePath(email, req.files['taraItaPacketUpload'][0].filename)
-      : null;
-
-
-    const voucherDatesPath = req.files && req.files['voucherDates'] && req.files['voucherDates'][0]
-      ? getRelativePath(email, req.files['voucherDates'][0].filename)
-      : null;
-
-    console.log("Photo Path",photoPath,  "dlUploadPath",dlUploadPath, "ssnUploadPath",ssnUploadPath, "taraItaPath",taraItaPath, "voucherDatesPath",voucherDatesPath);
-
-    // First check if email already exists
-    const checkEmailSql = "SELECT id FROM students WHERE email = ?";
-    db.query(checkEmailSql, [email], async (emailErr, emailResult) => {
-      if (emailErr) {
-        console.error("Error checking email existence:", emailErr);
+      } catch (hashError) {
+        console.error("Error hashing password:", hashError);
         // Clean up uploaded files
         if (req.files) {
           Object.values(req.files).forEach(fileArray => {
@@ -504,156 +279,11 @@ router.post('/joomla-registration', upload, validateStudent, async (req, res) =>
             });
           });
         }
-        return res.status(500).json({ success: false, message: "Database error" });
-      }
-
-      if (emailResult.length > 0) {
-        // Clean up uploaded files
-        if (req.files) {
-          Object.values(req.files).forEach(fileArray => {
-            fileArray.forEach(file => {
-              try {
-                fs.unlinkSync(file.path);
-              } catch (unlinkError) {
-                console.error('Error deleting file:', unlinkError);
-              }
-            });
-          });
-        }
-        return res.status(400).json({
+        return res.status(500).json({
           success: false,
-          message: "Student with this email already exists"
+          message: "Error processing registration"
         });
       }
-
-      // If email is unique, then check login ID
-      const checkLoginSql = "SELECT id FROM students WHERE login_id = ?";
-      db.query(checkLoginSql, [loginId], async (loginErr, loginResult) => {
-        if (loginErr) {
-          console.error("Error checking login ID existence:", loginErr);
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
-            });
-          }
-          return res.status(500).json({ success: false, message: "Database error" });
-        }
-
-        if (loginResult.length > 0) {
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
-            });
-          }
-          return res.status(400).json({
-            success: false,
-            message: "Student with this login ID already exists"
-          });
-        }
-
-        // Both email and login ID are unique, proceed with registration
-        try {
-          // Hash password
-          const salt = await bcrypt.genSalt(10);
-          const hashedPassword = await bcrypt.hash(password, salt);
-
-          // Insert student record
-          const insertSql = `
-            INSERT INTO students (
-                login_id, password, first_name, last_name, email, phone,
-                date_of_birth, course, department, student_notes, session,
-                drivers_license, dl_upload, student_pcp_info, student_pcp_phone,
-                status, semester, social_security_number, social_security_upload,
-                emergency_contact_info, emergency_contact_phone, other_emergency_contact,
-                caseworker_name, workforce_center, tara_ita_packet_upload,
-                tara_ita_completion_date, voucher_dates, info_session_date,
-                notes, course_pref1, days_pref1, location_pref1, course_pref2,
-                days_pref2, location_pref2, attended_info_session, info_session_location,
-                additional_comments, signature, name_capitalization, photo,
-                address_line1, city, state, postal_code, country,
-                gender, religion, nationality,registration_number,date_of_joining
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `;
-
-          const attendedInfoSessionValue = attendedInfoSession === "true" ? 1 : 0;
-
-          const values = [
-            loginId, hashedPassword, firstName, lastName, email, phone,
-            dateOfBirth, course, department, studentNotes, session,
-            driversLicense, dlUploadPath, studentPcpInfo, studentPcpPhone,
-            status || 'Active', semester, socialSecurityNumber, ssnUploadPath,
-            emergencyContactInfo, emergencyContactPhone, otherEmergencyContact,
-            caseworkerName, workforceCenter, taraItaPath,
-            taraItaCompletionDate, voucherDatesPath, infoSessionDate,
-            notes, coursePref1, daysPref1, locationPref1, coursePref2,
-            daysPref2, locationPref2, attendedInfoSessionValue, infoSessionLocation,
-            additionalComments, signature, nameCapitalization, photoPath,
-            addressLine1, city, state, postalCode, country,
-            gender, religion, nationality, registrationNumber, dateOfJoining
-          ];
-
-          db.query(insertSql, values, (insertErr, insertResult) => {
-            if (insertErr) {
-              console.error("Error inserting student:", insertErr);
-              // Clean up uploaded files
-              if (req.files) {
-                Object.values(req.files).forEach(fileArray => {
-                  fileArray.forEach(file => {
-                    try {
-                      fs.unlinkSync(file.path);
-                    } catch (unlinkError) {
-                      console.error('Error deleting file:', unlinkError);
-                    }
-                  });
-                });
-              }
-              console.log("Error creating student record", insertErr);
-              return res.status(500).json({
-                success: false,
-                message: "Error creating student record"
-              });
-            }
-
-            res.json({
-              success: true,
-              message: "Student registered successfully",
-              studentId: insertResult.insertId
-            });
-          });
-        } catch (hashError) {
-          console.error("Error hashing password:", hashError);
-          // Clean up uploaded files
-          if (req.files) {
-            Object.values(req.files).forEach(fileArray => {
-              fileArray.forEach(file => {
-                try {
-                  fs.unlinkSync(file.path);
-                } catch (unlinkError) {
-                  console.error('Error deleting file:', unlinkError);
-                }
-              });
-            });
-          }
-          return res.status(500).json({
-            success: false,
-            message: "Error processing registration"
-          });
-        }
-      });
     });
   } catch (error) {
     console.error("Server error in POST /students:", error);
@@ -675,7 +305,6 @@ router.post('/joomla-registration', upload, validateStudent, async (req, res) =>
     });
   }
 });
-
 
 router.get('/', async (req, res) => {
   try {
@@ -789,9 +418,9 @@ router.put('/:id/status', async (req, res) => {
     // Validate status
     const validStatuses = ['Active', 'Inactive', 'Pending', 'Approved'];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid status. Must be one of: Active, Inactive, Pending, Approved' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be one of: Active, Inactive, Pending, Approved'
       });
     }
 
@@ -814,20 +443,10 @@ router.put('/:id/status', async (req, res) => {
           return res.status(500).json({ success: false, message: 'Database error while updating status' });
         }
 
-        // Log the activity
+        // Format the response
         const student = existingStudent[0];
-        const activityMessage = `Updated status of student ${student.first_name} ${student.last_name} (ID: ${id}) to ${status}`;
-        
-        // Import and use activity logger if available
-        try {
-          const { logActivity } = require('../utils/activityLogger');
-          logActivity('Student', 'UPDATE', activityMessage, req.user?.id);
-        } catch (loggerError) {
-          console.log('Activity logger not available:', loggerError.message);
-        }
-
-        res.json({ 
-          success: true, 
+        res.json({
+          success: true,
           message: `Student status updated to ${status} successfully`,
           data: {
             id: parseInt(id),
@@ -906,31 +525,6 @@ router.get('/:id/details', async (req, res) => {
         ORDER BY a.attendance_date DESC
       `;
 
-      // Get grades (if grades table exists)
-      const gradesQuery = `
-        SELECT 
-          g.id,
-          g.student_id,
-          g.points_scored,
-          g.notes,
-          g.created_at,
-          gc.column_name,
-          gc.max_points,
-          gc.include_in_calculation,
-          gcat.category_name,
-          c.course_name,
-          ses.session_name,
-          CONCAT(i.name) as instructor_name
-        FROM grades g
-        LEFT JOIN grade_columns gc ON g.column_id = gc.id
-        LEFT JOIN grade_categories gcat ON gc.category_id = gcat.id
-        LEFT JOIN courses c ON gc.course_id = c.id
-        LEFT JOIN sessions ses ON g.session_id = ses.id
-        LEFT JOIN instructors i ON c.instructor_id = i.id
-        WHERE g.student_id = ?
-        ORDER BY g.created_at DESC
-      `;
-
       // Get signed documents (if documents table exists)
       const documentsQuery = `
         SELECT 
@@ -992,132 +586,116 @@ router.get('/:id/details', async (req, res) => {
       // Execute all queries in parallel
       db.query(workforceQuery, [id], (workforceErr, workforceResults) => {
         db.query(attendanceQuery, [id], (attendanceErr, attendanceResults) => {
-          db.query(gradesQuery, [id], (gradesErr, gradesResults) => {
-            db.query(documentsQuery, [id], (documentsErr, documentsResults) => {
-              db.query(itaAttendanceQuery, [id], (itaErr, itaResults) => {
-                db.query(previousCoursesQuery, [id], (prevErr, prevResults) => {
-                  
-                  // Check for errors (but don't fail if some tables don't exist)
-                  const errors = [];
-                  if (workforceErr) errors.push('workforce');
-                  if (attendanceErr && !attendanceErr.message.includes("doesn't exist")) errors.push('attendance');
-                  if (gradesErr && !gradesErr.message.includes("doesn't exist")) errors.push('grades');
-                  if (documentsErr && !documentsErr.message.includes("doesn't exist")) errors.push('documents');
-                  if (itaErr && !itaErr.message.includes("doesn't exist")) errors.push('ita');
-                  if (prevErr && !prevErr.message.includes("doesn't exist")) errors.push('previous_courses');
-                  
-                  if (errors.length > 0) {
-                    console.error('Errors fetching related data:', errors);
-                  }
+          db.query(documentsQuery, [id], (documentsErr, documentsResults) => {
+            db.query(itaAttendanceQuery, [id], (itaErr, itaResults) => {
+              db.query(previousCoursesQuery, [id], (prevErr, prevResults) => {
 
-                  // Format the response
-                  const studentDetails = {
-                    // Basic student information
-                    student: {
-                      id: student.id,
-                      registrationNumber: student.registration_number,
-                      firstName: student.first_name,
-                      lastName: student.last_name,
-                      email: student.email,
-                      phone: student.phone,
-                      dateOfBirth: student.date_of_birth,
-                      gender: student.gender,
-                      address: `${student.address_line1 || ''} ${student.city || ''} ${student.state || ''} ${student.postal_code || ''}`.trim(),
-                      emergencyContact: student.emergency_contact_info,
-                      emergencyContactPhone: student.emergency_contact_phone,
-                      otherEmergencyContact: student.other_emergency_contact,
-                      course: student.course_name || student.course,
-                      department: student.department,
-                      session: student.session_name || student.session,
-                      instructor: student.instructor_name,
-                      semester: student.semester,
-                      religion: student.religion,
-                      nationality: student.nationality,
-                      dateOfJoining: student.date_of_joining,
-                      socialSecurityNumber: student.social_security_number,
-                      studentNotes: student.student_notes,
-                      studentPcpInfo: student.student_pcp_info,
-                      studentPcpPhone: student.student_pcp_phone,
-                      status: student.status,
-                      photo: student.photo,
-                      dlUpload: student.dl_upload,
-                      ssnUpload: student.social_security_upload,
-                      addedTime: student.created_at
-                    },
+                // Check for errors (but don't fail if some tables don't exist)
+                const errors = [];
+                if (workforceErr) errors.push('workforce');
+                if (attendanceErr && !attendanceErr.message.includes("doesn't exist")) errors.push('attendance');
+                if (documentsErr && !documentsErr.message.includes("doesn't exist")) errors.push('documents');
+                if (itaErr && !itaErr.message.includes("doesn't exist")) errors.push('ita');
+                if (prevErr && !prevErr.message.includes("doesn't exist")) errors.push('previous_courses');
 
-                    // Workforce information
-                    workforce: {
-                      caseworker: workforceResults[0]?.caseworker_name || '',
-                      workforceCenter: workforceResults[0]?.workforce_center || '',
-                      taraPacket: workforceResults[0]?.tara_ita_packet_upload || '',
-                      taraCompletionDate: workforceResults[0]?.tara_ita_completion_date || '',
-                      voucherDates: workforceResults[0]?.voucher_dates || ''
-                    },
+                if (errors.length > 0) {
+                  console.error('Errors fetching related data:', errors);
+                }
 
-                    // Attendance records
-                    attendance: attendanceErr ? [] : attendanceResults.map(att => ({
-                      id: att.id,
-                      date: att.date,
-                      status: att.status,
-                      notes: att.notes,
-                      course: att.course_name
-                    })),
+                // Format the response
+                const studentDetails = {
+                  // Basic student information
+                  student: {
+                    id: student.id,
+                    registrationNumber: student.registration_number,
+                    firstName: student.first_name,
+                    lastName: student.last_name,
+                    email: student.email,
+                    phone: student.phone,
+                    dateOfBirth: student.date_of_birth,
+                    gender: student.gender,
+                    address: `${student.address_line1 || ''} ${student.city || ''} ${student.state || ''} ${student.postal_code || ''}`.trim(),
+                    emergencyContact: student.emergency_contact_info,
+                    emergencyContactPhone: student.emergency_contact_phone,
+                    otherEmergencyContact: student.other_emergency_contact,
+                    course: student.course_name || student.course,
+                    department: student.department,
+                    session: student.session_name || student.session,
+                    instructor: student.instructor_name,
+                    semester: student.semester,
+                    religion: student.religion,
+                    nationality: student.nationality,
+                    dateOfJoining: student.date_of_joining,
+                    socialSecurityNumber: student.social_security_number,
+                    studentNotes: student.student_notes,
+                    studentPcpInfo: student.student_pcp_info,
+                    studentPcpPhone: student.student_pcp_phone,
+                    status: student.status,
+                    photo: student.photo,
+                    dlUpload: student.dl_upload,
+                    ssnUpload: student.social_security_upload,
+                    addedTime: student.created_at
+                  },
 
-                    // Grades
-                    grades: gradesErr ? [] : gradesResults.map(grade => ({
-                      id: grade.id,
-                      session: grade.session_name,
-                      category: grade.category_name,
-                      name: grade.column_name,
-                      maxPoints: grade.max_points,
-                      pointsScored: grade.points_scored,
-                      includeInCalculation: grade.include_in_calculation,
-                      instructor: grade.instructor_name,
-                      date: grade.created_at
-                    })),
+                  // Workforce information
+                  workforce: {
+                    caseworker: workforceResults[0]?.caseworker_name || '',
+                    workforceCenter: workforceResults[0]?.workforce_center || '',
+                    taraPacket: workforceResults[0]?.tara_ita_packet_upload || '',
+                    taraCompletionDate: workforceResults[0]?.tara_ita_completion_date || '',
+                    voucherDates: workforceResults[0]?.voucher_dates || ''
+                  },
 
-                    // Signed documents
-                    documents: documentsErr ? [] : documentsResults.map(doc => ({
-                      id: doc.id,
-                      course: doc.course_name,
-                      session: doc.session_name,
-                      particulars: doc.document_type,
-                      file: doc.file_path,
-                      uploadDate: doc.upload_date,
-                      notes: doc.notes
-                    })),
+                  // Attendance records
+                  attendance: attendanceErr ? [] : attendanceResults.map(att => ({
+                    id: att.id,
+                    date: att.date,
+                    status: att.status,
+                    notes: att.notes,
+                    course: att.course_name
+                  })),
 
-                    // Signed ITA attendance
-                    itaAttendance: itaErr ? [] : itaResults.map(ita => ({
-                      id: ita.id,
-                      date: ita.date,
-                      status: ita.status,
-                      hoursCompleted: ita.hours_completed,
-                      totalHoursAccumulated: ita.total_hours_accumulated,
-                      studentSignature: ita.student_signature,
-                      instructorSignature: ita.instructor_signature,
-                      instructor: ita.instructor_name,
-                      course: ita.course_name,
-                      session: ita.session_name,
-                      notes: ita.notes,
-                      createdDate: ita.created_at
-                    })),
+                  // Signed documents
+                  documents: documentsErr ? [] : documentsResults.map(doc => ({
+                    id: doc.id,
+                    course: doc.course_name,
+                    session: doc.session_name,
+                    particulars: doc.document_type,
+                    file: doc.file_path,
+                    uploadDate: doc.upload_date,
+                    notes: doc.notes
+                  })),
 
-                    // Previous courses
-                    previousCourses: prevErr ? [] : prevResults.map(prev => ({
-                      id: prev.id,
-                      course: prev.course_name,
-                      session: prev.session_name,
-                      movedDate: prev.moved_date,
-                      status: prev.student_course_status,
-                      notes: prev.notes
-                    }))
-                  };
+                  // Signed ITA attendance
+                  itaAttendance: itaErr ? [] : itaResults.map(ita => ({
+                    id: ita.id,
+                    date: ita.date,
+                    status: ita.status,
+                    hoursCompleted: ita.hours_completed,
+                    totalHoursAccumulated: ita.total_hours_accumulated,
+                    studentSignature: ita.student_signature,
+                    instructorSignature: ita.instructor_signature,
+                    instructor: ita.instructor_name,
+                    course: ita.course_name,
+                    session: ita.session_name,
+                    notes: ita.notes,
+                    createdDate: ita.created_at
+                  })),
 
-                  res.json({
-                    success: true,
-                    studentDetails
-                  });
+                  // Previous courses
+                  previousCourses: prevErr ? [] : prevResults.map(prev => ({
+                    id: prev.id,
+                    course: prev.course_name,
+                    session: prev.session_name,
+                    movedDate: prev.moved_date,
+                    status: prev.student_course_status,
+                    notes: prev.notes
+                  }))
+                };
+
+                res.json({
+                  success: true,
+                  studentDetails
                 });
               });
             });
@@ -1141,7 +719,7 @@ router.delete('/:id', async (req, res) => {
 
     // Check if student exists
     const [student] = await db.promise().query('SELECT * FROM students WHERE id = ?', [id]);
-    
+
     if (student.length === 0) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
@@ -1176,546 +754,332 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// create a post route to save student enrollment data
-router.post('/joomla-enrollment-form', upload, async (req, res) => {
-    console.log("req.body", req.body);
-    
+// POST request to save enrollment forms
+router.post('/enrollment-forms', handleStudentFileUpload(), async (req, res) => {
+  try {
+    console.log("Enrollment form data received:", req.body);
+
     const db = req.app.locals.db;
-    
-    try {
-        // Check if database connection is alive
-        if (!db || db.state === 'disconnected') {
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Database connection not available' 
-            });
-        }
+    const formData = req.body;
 
-        const {
-            enrollmentAgreementForm,
-            medicalEvalForm,
-            studentIDForm,
-            uniformSizeForm,
-            consentForm,
-            backgroundCheckForm,
-            acknowledgementForm,
-            studentInfo
-        } = req.body;
+    // Check if student with this email already exists
+    const [existingStudents] = await db.promise().query(
+      'SELECT id FROM students WHERE email = ?',
+      [formData.enroll_email]
+    );
 
-        // First, create or find the student
-        let studentId;
-        
-        // Check if student already exists
-        const [existingStudents] = await db.promise().query(
-            'SELECT id FROM students WHERE email = ?',
-            [studentInfo.email]
-        );
-
-        if (existingStudents.length > 0) {
-            studentId = existingStudents[0].id;
-            console.log('Found existing student with ID:', studentId);
-        } else {
-            // Create new student - using only the most basic columns that should exist
-            const [studentResult] = await db.promise().query(
-                'INSERT INTO students (first_name, last_name, email, phone) VALUES (?, ?, ?, ?)',
-                [
-                    studentInfo.firstName,
-                    studentInfo.lastName,
-                    studentInfo.email,
-                    studentInfo.phone
-                ]
-            );
-            studentId = studentResult.insertId;
-            console.log('Created new student with ID:', studentId);
-        }
-
-        // Create the enrollment tables first if they don't exist
-        await createEnrollmentTables(db);
-
-        // Insert Enrollment Agreement Form
-        const [enrollmentAgreementResult] = await db.promise().query(
-            `INSERT INTO enrollment_agreement_forms (
-                student_id, enroll_student_name, enroll_student_id, enroll_address, enroll_city, 
-                enroll_state, enroll_zip, enroll_ec_telephone, enroll_phone_h, enroll_phone_c, 
-                enroll_phone_w, enroll_email, enroll_ssn, enroll_admission_date, enroll_program_name,
-                enroll_program_description, enroll_program_start_date, enroll_scheduled_end_date,
-                enroll_type, enroll_schedule_type, class_days, enroll_time_begins, enroll_time_ends,
-                enroll_num_weeks, enroll_total_hours, aggrement_to_tuition_fees,
-                aggrement_to_refund_and_cancellation_policy, reg_fee, program_cost, tuition,
-                books_supplies, misc_expenses, other_expenses, total_cost, ack_catalog,
-                ack_enrollment_agreement, ack_termination_policy, ack_consumer_info,
-                ack_transferability, ack_job_placement, ack_complaints
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                studentId, enrollmentAgreementForm.enroll_student_name, enrollmentAgreementForm.enroll_student_id,
-                enrollmentAgreementForm.enroll_address, enrollmentAgreementForm.enroll_city,
-                enrollmentAgreementForm.enroll_state, enrollmentAgreementForm.enroll_zip,
-                enrollmentAgreementForm.enroll_ec_telephone, enrollmentAgreementForm.enroll_phone_h,
-                enrollmentAgreementForm.enroll_phone_c, enrollmentAgreementForm.enroll_phone_w,
-                enrollmentAgreementForm.enroll_email, enrollmentAgreementForm.enroll_ssn,
-                enrollmentAgreementForm.enroll_admission_date, enrollmentAgreementForm.enroll_program_name,
-                enrollmentAgreementForm.enroll_program_description, enrollmentAgreementForm.enroll_program_start_date,
-                enrollmentAgreementForm.enroll_scheduled_end_date, enrollmentAgreementForm.enroll_type,
-                enrollmentAgreementForm.enroll_schedule_type, enrollmentAgreementForm.class_days,
-                enrollmentAgreementForm.enroll_time_begins, enrollmentAgreementForm.enroll_time_ends,
-                enrollmentAgreementForm.enroll_num_weeks, enrollmentAgreementForm.enroll_total_hours,
-                enrollmentAgreementForm.aggrement_to_tuition_fees,
-                enrollmentAgreementForm.aggrement_to_refund_and_cancellation_policy,
-                enrollmentAgreementForm.reg_fee, enrollmentAgreementForm.program_cost,
-                enrollmentAgreementForm.tuition, enrollmentAgreementForm.books_supplies,
-                enrollmentAgreementForm.misc_expenses, enrollmentAgreementForm.other_expenses,
-                enrollmentAgreementForm.total_cost, enrollmentAgreementForm.ack_catalog,
-                enrollmentAgreementForm.ack_enrollment_agreement, enrollmentAgreementForm.ack_termination_policy,
-                enrollmentAgreementForm.ack_consumer_info, enrollmentAgreementForm.ack_transferability,
-                enrollmentAgreementForm.ack_job_placement, enrollmentAgreementForm.ack_complaints
-            ]
-        );
-
-        // Insert Medical Evaluation Form
-        const [medicalEvalResult] = await db.promise().query(
-            `INSERT INTO medical_evaluation_forms (
-                student_id, program_nursing_assistant, med_birth_date, med_gender, med_home_phone,
-                med_work_phone, med_cell_phone, em_full_name, em_relationship, em_address,
-                em_city, state_select, em_zip, em_phone_home, em_phone_work, em_phone_cell,
-                health_status, allergies, medications_present, meds_list, latex_allergy,
-                food_allergy, food_list, pregnant, due_date, obgyn, lifting_restrictions,
-                restrictions_explain, interfere_standards, interfere_explain, ack_med_eval_info,
-                std_mobility, std_motor_skills, std_visual, std_hearing, std_tactile,
-                std_communication, std_acquire_knowledge, std_clinical_judgment, std_professional_attitude
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                studentId, medicalEvalForm.program_nursing_assistant, medicalEvalForm.med_birth_date,
-                medicalEvalForm.med_gender, medicalEvalForm.med_home_phone, medicalEvalForm.med_work_phone,
-                medicalEvalForm.med_cell_phone, medicalEvalForm.em_full_name, medicalEvalForm.em_relationship,
-                medicalEvalForm.em_address, medicalEvalForm.em_city, medicalEvalForm.state_select,
-                medicalEvalForm.em_zip, medicalEvalForm.em_phone_home, medicalEvalForm.em_phone_work,
-                medicalEvalForm.em_phone_cell, medicalEvalForm.health_status, medicalEvalForm.allergies,
-                medicalEvalForm.medications_present, medicalEvalForm.meds_list, medicalEvalForm.latex_allergy,
-                medicalEvalForm.food_allergy, medicalEvalForm.food_list, medicalEvalForm.pregnant,
-                medicalEvalForm.due_date, medicalEvalForm.obgyn, medicalEvalForm.lifting_restrictions,
-                medicalEvalForm.restrictions_explain, medicalEvalForm.interfere_standards,
-                medicalEvalForm.interfere_explain, medicalEvalForm.ack_med_eval_info,
-                medicalEvalForm.std_mobility, medicalEvalForm.std_motor_skills, medicalEvalForm.std_visual,
-                medicalEvalForm.std_hearing, medicalEvalForm.std_tactile, medicalEvalForm.std_communication,
-                medicalEvalForm.std_acquire_knowledge, medicalEvalForm.std_clinical_judgment,
-                medicalEvalForm.std_professional_attitude
-            ]
-        );
-
-        // Insert Student ID Form
-        const [studentIDResult] = await db.promise().query(
-            'INSERT INTO student_id_forms (student_id, id_lost_fee, id_terms_agree) VALUES (?, ?, ?)',
-            [studentId, studentIDForm.id_lost_fee, studentIDForm.id_terms_agree]
-        );
-
-        // Insert Uniform Size Form
-        const [uniformSizeResult] = await db.promise().query(
-            'INSERT INTO uniform_size_forms (student_id, uniform_size) VALUES (?, ?)',
-            [studentId, uniformSizeForm.uniform_size]
-        );
-
-        // Insert Consent Form
-        const [consentResult] = await db.promise().query(
-            'INSERT INTO consent_forms (student_id, consent_read_understand) VALUES (?, ?)',
-            [studentId, consentForm.consent_read_understand]
-        );
-
-        // Insert Background Check Form
-        const [backgroundCheckResult] = await db.promise().query(
-            `INSERT INTO background_check_forms (
-                student_id, bc_first_name, bc_full_middle_name, bc_last_name, bc_mailing_address,
-                bc_city, bc_state, bc_zip, bc_other_names, bc_telephone, bc_states_lived,
-                bc_gender, bc_race, bc_height_ft, bc_height_in, bc_weight, bc_dob, bc_ssn,
-                bc_hair_color, bc_eye_color, bc_place_of_birth, bc_abuse, bc_abuse_details,
-                bc_convicted, bc_convicted_details, bc_parent_signature_data, bc_parent_signature_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                studentId, backgroundCheckForm.bc_first_name, backgroundCheckForm.bc_full_middle_name,
-                backgroundCheckForm.bc_last_name, backgroundCheckForm.bc_mailing_address,
-                backgroundCheckForm.bc_city, backgroundCheckForm.bc_state, backgroundCheckForm.bc_zip,
-                backgroundCheckForm.bc_other_names, backgroundCheckForm.bc_telephone,
-                backgroundCheckForm.bc_states_lived, backgroundCheckForm.bc_gender,
-                backgroundCheckForm.bc_race, backgroundCheckForm.bc_height_ft,
-                backgroundCheckForm.bc_height_in, backgroundCheckForm.bc_weight,
-                backgroundCheckForm.bc_dob, backgroundCheckForm.bc_ssn,
-                backgroundCheckForm.bc_hair_color, backgroundCheckForm.bc_eye_color,
-                backgroundCheckForm.bc_place_of_birth, backgroundCheckForm.bc_abuse,
-                backgroundCheckForm.bc_abuse_details, backgroundCheckForm.bc_convicted,
-                backgroundCheckForm.bc_convicted_details, backgroundCheckForm.bc_parent_signature_data,
-                backgroundCheckForm.bc_parent_signature_date
-            ]
-        );
-
-        // Insert Acknowledgement Form
-        const [acknowledgementResult] = await db.promise().query(
-            `INSERT INTO acknowledgement_forms (
-                student_id, acknowledgementRead, contractUnderstanding,
-                student_ack_signature_data, acknowledgementDate
-            ) VALUES (?, ?, ?, ?, ?)`,
-            [
-                studentId, acknowledgementForm.acknowledgementRead,
-                acknowledgementForm.contractUnderstanding,
-                acknowledgementForm.student_ack_signature_data,
-                acknowledgementForm.acknowledgementDate
-            ]
-        );
-
-        // Create main enrollment form record linking all forms
-        const [enrollmentFormResult] = await db.promise().query(
-            `INSERT INTO enrollment_forms (
-                student_id, enrollment_agreement_form_id, medical_evaluation_form_id,
-                student_id_form_id, uniform_size_form_id, consent_form_id,
-                background_check_form_id, acknowledgement_form_id, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                studentId, enrollmentAgreementResult.insertId, medicalEvalResult.insertId,
-                studentIDResult.insertId, uniformSizeResult.insertId, consentResult.insertId,
-                backgroundCheckResult.insertId, acknowledgementResult.insertId, 'Submitted'
-            ]
-        );
-
-        console.log('Enrollment form data saved successfully');
-        console.log('Student ID:', studentId);
-        console.log('Enrollment Form ID:', enrollmentFormResult.insertId);
-
-        res.json({
-            success: true,
-            message: 'Enrollment form submitted successfully',
-            studentId: studentId,
-            enrollmentFormId: enrollmentFormResult.insertId
-        });
-
-    } catch (error) {
-        console.error('Error saving enrollment form:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to save enrollment form',
-            error: error.message
-        });
+    if (existingStudents.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student is not registered. Please register as a student first before submitting enrollment forms.'
+      });
     }
+
+    const studentId = existingStudents[0].id;
+    console.log(`Found existing student with ID: ${studentId}`);
+
+    // Save enrollment form data to enrollment_forms table
+    const enrollmentData = {
+      student_id: studentId,
+      form_data: JSON.stringify(formData),
+      created_at: new Date()
+    };
+
+    // Insert enrollment form data
+    const [enrollmentResult] = await db.promise().query(
+      'INSERT INTO enrollment_forms SET ?',
+      enrollmentData
+    );
+
+    console.log(`Enrollment form saved with ID: ${enrollmentResult.insertId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Enrollment form submitted successfully',
+      studentId: studentId,
+      enrollmentId: enrollmentResult.insertId
+    });
+
+  } catch (error) {
+    console.error('Error saving enrollment form:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error saving enrollment form',
+      error: error.message
+    });
+  }
 });
 
-// Function to create enrollment tables if they don't exist
-async function createEnrollmentTables(db) {
-    try {
-        console.log('Creating enrollment tables...');
-        
-        // Create each table separately
-        const tables = [
-            {
-                name: 'enrollment_agreement_forms',
-                sql: `CREATE TABLE IF NOT EXISTS enrollment_agreement_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    enroll_student_name VARCHAR(255),
-                    enroll_student_id VARCHAR(255),
-                    enroll_address TEXT,
-                    enroll_city VARCHAR(100),
-                    enroll_state VARCHAR(10),
-                    enroll_zip VARCHAR(20),
-                    enroll_ec_telephone VARCHAR(50),
-                    enroll_phone_h VARCHAR(50),
-                    enroll_phone_c VARCHAR(50),
-                    enroll_phone_w VARCHAR(50),
-                    enroll_email VARCHAR(255),
-                    enroll_ssn VARCHAR(20),
-                    enroll_admission_date DATE,
-                    enroll_program_name VARCHAR(100),
-                    enroll_program_description TEXT,
-                    enroll_program_start_date DATE,
-                    enroll_scheduled_end_date DATE,
-                    enroll_type VARCHAR(50),
-                    enroll_schedule_type VARCHAR(50),
-                    class_days VARCHAR(50),
-                    enroll_time_begins TIME,
-                    enroll_time_ends TIME,
-                    enroll_num_weeks VARCHAR(10),
-                    enroll_total_hours VARCHAR(10),
-                    aggrement_to_tuition_fees VARCHAR(255),
-                    aggrement_to_refund_and_cancellation_policy VARCHAR(255),
-                    reg_fee VARCHAR(50),
-                    program_cost DECIMAL(10,2),
-                    tuition DECIMAL(10,2),
-                    books_supplies DECIMAL(10,2),
-                    misc_expenses DECIMAL(10,2),
-                    other_expenses DECIMAL(10,2),
-                    total_cost DECIMAL(10,2),
-                    ack_catalog VARCHAR(10),
-                    ack_enrollment_agreement VARCHAR(10),
-                    ack_termination_policy VARCHAR(10),
-                    ack_consumer_info VARCHAR(10),
-                    ack_transferability VARCHAR(10),
-                    ack_job_placement VARCHAR(10),
-                    ack_complaints VARCHAR(10),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'medical_evaluation_forms',
-                sql: `CREATE TABLE IF NOT EXISTS medical_evaluation_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    program_nursing_assistant VARCHAR(100),
-                    med_birth_date DATE,
-                    med_gender VARCHAR(20),
-                    med_home_phone VARCHAR(50),
-                    med_work_phone VARCHAR(50),
-                    med_cell_phone VARCHAR(50),
-                    em_full_name VARCHAR(255),
-                    em_relationship VARCHAR(100),
-                    em_address TEXT,
-                    em_city VARCHAR(100),
-                    state_select VARCHAR(10),
-                    em_zip VARCHAR(20),
-                    em_phone_home VARCHAR(50),
-                    em_phone_work VARCHAR(50),
-                    em_phone_cell VARCHAR(50),
-                    health_status VARCHAR(50),
-                    allergies TEXT,
-                    medications_present VARCHAR(10),
-                    meds_list TEXT,
-                    latex_allergy VARCHAR(10),
-                    food_allergy VARCHAR(10),
-                    food_list TEXT,
-                    pregnant VARCHAR(10),
-                    due_date DATE,
-                    obgyn VARCHAR(10),
-                    lifting_restrictions VARCHAR(10),
-                    restrictions_explain TEXT,
-                    interfere_standards VARCHAR(10),
-                    interfere_explain TEXT,
-                    ack_med_eval_info VARCHAR(10),
-                    std_mobility BOOLEAN DEFAULT FALSE,
-                    std_motor_skills BOOLEAN DEFAULT FALSE,
-                    std_visual BOOLEAN DEFAULT FALSE,
-                    std_hearing BOOLEAN DEFAULT FALSE,
-                    std_tactile BOOLEAN DEFAULT FALSE,
-                    std_communication BOOLEAN DEFAULT FALSE,
-                    std_acquire_knowledge BOOLEAN DEFAULT FALSE,
-                    std_clinical_judgment BOOLEAN DEFAULT FALSE,
-                    std_professional_attitude BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'student_id_forms',
-                sql: `CREATE TABLE IF NOT EXISTS student_id_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    id_lost_fee VARCHAR(10),
-                    id_terms_agree VARCHAR(10),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'uniform_size_forms',
-                sql: `CREATE TABLE IF NOT EXISTS uniform_size_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    uniform_size VARCHAR(10),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'consent_forms',
-                sql: `CREATE TABLE IF NOT EXISTS consent_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    consent_read_understand VARCHAR(10),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'background_check_forms',
-                sql: `CREATE TABLE IF NOT EXISTS background_check_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    bc_first_name VARCHAR(100),
-                    bc_full_middle_name VARCHAR(100),
-                    bc_last_name VARCHAR(100),
-                    bc_mailing_address TEXT,
-                    bc_city VARCHAR(100),
-                    bc_state VARCHAR(100),
-                    bc_zip VARCHAR(20),
-                    bc_other_names TEXT,
-                    bc_telephone VARCHAR(50),
-                    bc_states_lived VARCHAR(255),
-                    bc_gender VARCHAR(20),
-                    bc_race VARCHAR(10),
-                    bc_height_ft VARCHAR(10),
-                    bc_height_in VARCHAR(10),
-                    bc_weight VARCHAR(10),
-                    bc_dob DATE,
-                    bc_ssn VARCHAR(20),
-                    bc_hair_color VARCHAR(50),
-                    bc_eye_color VARCHAR(50),
-                    bc_place_of_birth VARCHAR(100),
-                    bc_abuse VARCHAR(10),
-                    bc_abuse_details TEXT,
-                    bc_convicted VARCHAR(10),
-                    bc_convicted_details TEXT,
-                    bc_parent_signature_data LONGTEXT,
-                    bc_parent_signature_date DATE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'acknowledgement_forms',
-                sql: `CREATE TABLE IF NOT EXISTS acknowledgement_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    acknowledgementRead VARCHAR(10),
-                    contractUnderstanding VARCHAR(10),
-                    student_ack_signature_data LONGTEXT,
-                    acknowledgementDate DATE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            },
-            {
-                name: 'enrollment_forms',
-                sql: `CREATE TABLE IF NOT EXISTS enrollment_forms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    student_id INT,
-                    enrollment_agreement_form_id INT,
-                    medical_evaluation_form_id INT,
-                    student_id_form_id INT,
-                    uniform_size_form_id INT,
-                    consent_form_id INT,
-                    background_check_form_id INT,
-                    acknowledgement_form_id INT,
-                    status ENUM('Draft', 'Submitted', 'Approved', 'Rejected') DEFAULT 'Draft',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )`
-            }
-        ];
+// GET request to retrieve student enrollment forms by email
+router.get('/enrollment-forms/:email', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const { email } = req.params;
 
-        // Create each table individually
-        for (const table of tables) {
-            try {
-                await db.promise().query(table.sql);
-                console.log(`Table ${table.name} created/verified successfully`);
-            } catch (error) {
-                console.error(`Error creating table ${table.name}:`, error);
-                throw error;
-            }
-        }
+    // First check if student with this email exists
+    const [existingStudents] = await db.promise().query(
+      'SELECT id, first_name, last_name, email FROM students WHERE email = ?',
+      [email]
+    );
 
-        console.log('All enrollment tables created/verified successfully');
-    } catch (error) {
-        console.error('Error creating enrollment tables:', error);
-        throw error;
+    if (existingStudents.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found with this email address.'
+      });
     }
-}
+
+    const student = existingStudents[0];
+
+    // Get all enrollment forms for this student
+    const [enrollmentForms] = await db.promise().query(
+      'SELECT id, form_data, created_at FROM enrollment_forms WHERE student_id = ? ORDER BY created_at DESC',
+      [student.id]
+    );
+
+    // Parse the JSON form_data for each enrollment form
+    const formattedEnrollmentForms = enrollmentForms.map(form => ({
+      id: form.id,
+      formData: JSON.parse(form.form_data),
+      submittedAt: form.created_at
+    }));
+
+    // Merge all fields from the latest enrollment form into the student object (if exists)
+    let mergedStudent = {
+      id: student.id,
+      firstName: student.first_name,
+      lastName: student.last_name,
+      email: student.email
+    };
+    if (formattedEnrollmentForms.length > 0) {
+      mergedStudent = {
+        ...mergedStudent,
+        ...formattedEnrollmentForms[0].formData // add all fields from latest form
+      };
+    }
+    console.log("Enrollment forms retrieved successfully", {
+      success: true,
+      message: 'Enrollment forms retrieved successfully',
+      student: mergedStudent,
+      enrollmentForms: formattedEnrollmentForms,
+      totalForms: formattedEnrollmentForms.length
+    });
+    res.json({
+      success: true,
+      message: 'Enrollment forms retrieved successfully',
+      student: mergedStudent,
+      enrollmentForms: formattedEnrollmentForms,
+      totalForms: formattedEnrollmentForms.length
+    });
+
+  } catch (error) {
+    console.error('Error retrieving enrollment forms:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving enrollment forms',
+      error: error.message
+    });
+  }
+});
+
+// Student login route
+router.post('/student-login', async (req, res) => {
+  console.log("Student login request:", req.body);
+
+  const db = req.app.locals.db;
+
+  try {
+    // Check if database connection is alive
+    if (!db || db.state === 'disconnected') {
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection not available'
+      });
+    }
+
+    const { email, loginId, password } = req.body;
+
+    // Validate required fields
+    if (!email || !loginId || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, login ID, and password are required'
+      });
+    }
+
+    // First, check if email exists
+    const [emailCheck] = await db.promise().query(
+      'SELECT id, email FROM students WHERE email = ?',
+      [email]
+    );
+
+    if (emailCheck.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'The provided email address is not associated with any registered student.'
+      });
+    }
+    console.log("emailCheck", emailCheck);
+    // If email exists, check login ID and password
+    const [studentCheck] = await db.promise().query(
+      'SELECT id, login_id, password, first_name, last_name, email, course, status FROM students WHERE email = ? AND login_id = ?',
+      [email, loginId]
+    );
+    console.log("studentCheck", studentCheck);
+    if (studentCheck.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid login ID. Please check your credentials.'
+      });
+    }
+
+    const student = studentCheck[0];
+    console.log("student", student.status);
+    // Check if student is active
+    if (student.status !== 'Active' && student.status !== 'active') {
+      return res.status(401).json({
+        success: false,
+        message: 'Your account is not active. Please contact support.'
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = password == student.password;
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid password. Please check your credentials.'
+      });
+    }
+
+    // Login successful
+    console.log('Student login successful:', student.email);
+
+    res.json({
+      success: true,
+      message: 'Login successful! Now you can fill out the form.',
+      student: {
+        id: student.id,
+        firstName: student.first_name,
+        lastName: student.last_name,
+        email: student.email,
+        course: student.course,
+        status: student.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Error during student login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred during login. Please try again.',
+      error: error.message
+    });
+  }
+});
 
 //create a post route to save student medical supplies form data
 router.post('/joomla-medical-supplies-form', async (req, res) => {
-    console.log("req.body", req.body);
-    
-    const db = req.app.locals.db;
-    
-    try {
-        // Check if database connection is alive
-        if (!db || db.state === 'disconnected') {
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Database connection not available' 
-            });
-        }
+  console.log("req.body", req.body);
 
-        const {
-            supply_book,
-            supply_workbook,
-            supply_gait_belt,
-            supply_bp_cuff,
-            supply_syllabus,
-            supply_skills_packet,
-            supply_math_packet,
-            program,
-            course,
-            student_name,
-            date,
-            medsup_signature_data,
-            email
-        } = req.body;
+  const db = req.app.locals.db;
 
-        // First, find the student by email
-        const [existingStudents] = await db.promise().query(
-            'SELECT id FROM students WHERE email = ?',
-            [email]
-        );
+  try {
+    // Check if database connection is alive
+    if (!db || db.state === 'disconnected') {
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection not available'
+      });
+    }
 
-        if (existingStudents.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found with this email'
-            });
-        }
+    const {
+      supply_book,
+      supply_workbook,
+      supply_gait_belt,
+      supply_bp_cuff,
+      supply_syllabus,
+      supply_skills_packet,
+      supply_math_packet,
+      program,
+      course,
+      student_name,
+      date,
+      medsup_signature_data,
+      email
+    } = req.body;
 
-        const studentId = existingStudents[0].id;
+    // First, find the student by email
+    const [existingStudents] = await db.promise().query(
+      'SELECT id FROM students WHERE email = ?',
+      [email]
+    );
 
-        // Create the medical supplies table if it doesn't exist
-        await createMedicalSuppliesTable(db);
+    if (existingStudents.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found with this email'
+      });
+    }
 
-        // Insert medical supplies form data
-        const [medicalSuppliesResult] = await db.promise().query(
-            `INSERT INTO medical_supplies_forms (
+    const studentId = existingStudents[0].id;
+
+    // Create the medical supplies table if it doesn't exist
+    await createMedicalSuppliesTable(db);
+
+    // Insert medical supplies form data
+    const [medicalSuppliesResult] = await db.promise().query(
+      `INSERT INTO medical_supplies_forms (
                 student_id, supply_book, supply_workbook, supply_gait_belt,
                 supply_bp_cuff, supply_syllabus, supply_skills_packet,
                 supply_math_packet, program, course, student_name,
                 date, medsup_signature_data
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                studentId,
-                supply_book === 'true' ? 1 : 0,
-                supply_workbook === 'true' ? 1 : 0,
-                supply_gait_belt === 'true' ? 1 : 0,
-                supply_bp_cuff === 'true' ? 1 : 0,
-                supply_syllabus === 'true' ? 1 : 0,
-                supply_skills_packet === 'true' ? 1 : 0,
-                supply_math_packet === 'true' ? 1 : 0,
-                program,
-                course,
-                student_name,
-                date,
-                medsup_signature_data
-            ]
-        );
+      [
+        studentId,
+        supply_book === 'true' ? 1 : 0,
+        supply_workbook === 'true' ? 1 : 0,
+        supply_gait_belt === 'true' ? 1 : 0,
+        supply_bp_cuff === 'true' ? 1 : 0,
+        supply_syllabus === 'true' ? 1 : 0,
+        supply_skills_packet === 'true' ? 1 : 0,
+        supply_math_packet === 'true' ? 1 : 0,
+        program,
+        course,
+        student_name,
+        date,
+        medsup_signature_data
+      ]
+    );
 
-        console.log('Medical supplies form data saved successfully');
-        console.log('Student ID:', studentId);
-        console.log('Medical Supplies Form ID:', medicalSuppliesResult.insertId);
+    console.log('Medical supplies form data saved successfully');
+    console.log('Student ID:', studentId);
+    console.log('Medical Supplies Form ID:', medicalSuppliesResult.insertId);
 
-        res.json({
-            success: true,
-            message: 'Medical supplies form submitted successfully',
-            studentId: studentId,
-            medicalSuppliesFormId: medicalSuppliesResult.insertId
-        });
+    res.json({
+      success: true,
+      message: 'Medical supplies form submitted successfully',
+      studentId: studentId,
+      medicalSuppliesFormId: medicalSuppliesResult.insertId
+    });
 
-    } catch (error) {
-        console.error('Error saving medical supplies form:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to save medical supplies form',
-            error: error.message
-        });
-    }
+  } catch (error) {
+    console.error('Error saving medical supplies form:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save medical supplies form',
+      error: error.message
+    });
+  }
 });
 
 // Function to create medical supplies table if it doesn't exist
 async function createMedicalSuppliesTable(db) {
-    try {
-        console.log('Creating medical supplies table...');
-        
-        const createTableSql = `
+  try {
+    console.log('Creating medical supplies table...');
+
+    const createTableSql = `
             CREATE TABLE IF NOT EXISTS medical_supplies_forms (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 student_id INT,
@@ -1737,13 +1101,13 @@ async function createMedicalSuppliesTable(db) {
             )
         `;
 
-        await db.promise().query(createTableSql);
-        console.log('Medical supplies table created/verified successfully');
-        
-    } catch (error) {
-        console.error('Error creating medical supplies table:', error);
-        throw error;
-    }
+    await db.promise().query(createTableSql);
+    console.log('Medical supplies table created/verified successfully');
+
+  } catch (error) {
+    console.error('Error creating medical supplies table:', error);
+    throw error;
+  }
 }
 
 module.exports = router;
